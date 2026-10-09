@@ -2,7 +2,7 @@
 
     python3 verify_sail.py              all cases
     python3 verify_sail.py --case S4    one case
-    python3 verify_sail.py --quick      the cheap ones (S1-S5, F1, C2-C4)
+    python3 verify_sail.py --quick      the cheap ones (S1-S5, F1, C2-C4, C7)
 
 S  structure:  S1 patch and frame invariance, S2 tangent consistency,
                S3 wrinkling law, S4 inflated strip against the exact arc,
@@ -11,7 +11,8 @@ F  fluid:      F1 panel loads, transfer conservation and the deck image
 C  coupled:    C1 membrane wing against two-dimensional sail theory,
                C2 the stiff limit, C3 mainsail leech tension,
                C4 coupling accelerators, C5 mesh convergence,
-               C6 free against frozen wake
+               C6 free against frozen wake, C7 two surfaces that see
+               each other
 """
 
 import sys
@@ -474,11 +475,53 @@ def case_C6():
               f"{time.time() - t:6.1f} s")
 
 
+def split_wing(nc, ns, sweeps=10):
+    """A rectangular wing solved whole, and as two halves that see each
+    other through sail_fluid.induced_field. Returns (full, (CL, CD) per
+    Gauss-Seidel sweep)."""
+    pts = pw.pitch_mesh(msi.rectangular_mesh(nchord=nc, nspan=ns),
+                        np.radians(5.0))
+    base = sf.sail_onset(1.0, 1.0)
+    full = sf.solve_fluid(pts, base, 1.0, rho=1.0)
+    h = ns // 2
+    halves = (pts[:, :h + 1].copy(), pts[:, h:].copy())
+    field, sols, hist = [None, None], [None, None], []
+    for _ in range(sweeps):
+        for k in (0, 1):
+            sols[k] = sf.solve_fluid(halves[k], base, 1.0, rho=1.0,
+                                     extra=field[1 - k])
+            field[k] = sf.induced_field(sols[k])
+        F = sols[0]["F"] + sols[1]["F"]
+        q_area = 0.5 * (sols[0]["area"] + sols[1]["area"])
+        hist.append((F[2] / q_area, F[0] / q_area))
+    return full, hist
+
+
+def case_C7():
+    header("C7", "two surfaces that see each other: a wing split in two")
+    print("  rectangular wing, AR 8, alpha 5 deg, frozen wake; the halves are"
+          " solved in turn,")
+    print("  each with the other's induced field in its boundary condition and"
+          " loads")
+    print("  mesh     CL whole   CL halves  CL error   CDi error  "
+          "last sweep change")
+    first = None
+    for nc, ns in ((4, 12), (4, 24), (8, 24)):
+        full, hist = split_wing(nc, ns)
+        first = first or hist
+        cl, cd = hist[-1]
+        print(f"  {nc} x {ns:2d}  {full['CL']:.6f}   {cl:.6f}   "
+              f"{cl / full['CL'] - 1:+.1e}   {cd / full['CD'] - 1:+.1e}    "
+              f"{abs(hist[-1][0] - hist[-2][0]):.1e}")
+    print("  Gauss-Seidel history of CL on 4 x 12: "
+          + ", ".join(f"{c:.6f}" for c, _ in first[:5]))
+
+
 CASES = {"S1": case_S1, "S2": case_S2, "S3": case_S3, "S4": case_S4,
          "S5": case_S5,
          "F1": case_F1, "C1": case_C1, "C2": case_C2, "C3": case_C3,
-         "C4": case_C4, "C5": case_C5, "C6": case_C6}
-QUICK = ("S1", "S2", "S3", "S4", "S5", "F1", "C2", "C3", "C4")
+         "C4": case_C4, "C5": case_C5, "C6": case_C6, "C7": case_C7}
+QUICK = ("S1", "S2", "S3", "S4", "S5", "F1", "C2", "C3", "C4", "C7")
 
 
 def main():

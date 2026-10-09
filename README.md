@@ -9,6 +9,13 @@ edge cables (leech, foot and head lines), pre-tension, full-length battens and
 a foot sealed on the deck. The apparent wind may vary in speed and direction
 with height.
 
+Several sails are solved together, each seeing the others' vortex systems, so
+a genoa and a mainsail interact as on a boat. `sail_plan.py` runs a J/80 sail
+plan upwind with rig, cloth and wind data from the literature, and plots the
+deformation and the cloth stresses (docs/figures/).
+
+![J/80 genoa and mainsail: larger principal stress](docs/figures/j80_stress.png)
+
 The lifting surface is
 [free-wake-lifting-surface](https://github.com/ignaziomviola/free-wake-lifting-surface),
 vendored verbatim and checked against a manifest (docs/FLUID.md). Everything
@@ -62,6 +69,12 @@ res = fsi.static_aeroelastic(model, pts0, onset, u_ref=6.0)
 print(res["fluid"]["CL"], fsi.flying_shape_report(res)[6])
 ```
 
+For the J/80 sail plan:
+
+```bash
+MPLBACKEND=Agg python3 sail_plan.py          # ca. 2 min, writes docs/figures/
+```
+
 ## Frame and units
 
 The vendored code takes the span along y and the lift along +z, so a sail is
@@ -76,8 +89,9 @@ cloth enters through its membrane stiffness E t [N m^-1].
 | `sail_membrane.py` | membrane triangles with wrinkling, cables, follower pressure, bending hinges, damped Newton solver |
 | `sail_fluid.py` | the sail adapter over the vendored solver: onset, deck image, per-panel loads, lumping |
 | `sail_fsi.py` | planforms, supports and battens, the coupling and its accelerators, diagnostics, the program |
+| `sail_plan.py` | several sails solved together; the J/80 genoa and mainsail upwind, with figures |
 | `sail_2d.py` | two-dimensional linear sail theory for an extensible membrane wing: the independent reference |
-| `verify_sail.py` | the verification programme, cases S1–S5, F1 and C1–C6 |
+| `verify_sail.py` | the verification programme, cases S1–S5, F1 and C1–C7 |
 | `test_membrane.py`, `test_sail.py`, `test_vendored.py` | unit tests (standard-library unittest) |
 | `panel_wing.py`, `make_sample_inputs.py` | the vendored lifting surface, not edited here |
 
@@ -86,15 +100,16 @@ cloth enters through its membrane stiffness E t [N m^-1].
 - [docs/MEMBRANE.md](docs/MEMBRANE.md): the structural formulation, the solver
   and the structural verification
 - [docs/COUPLING.md](docs/COUPLING.md): the sail frame, the onset, the
-  transfer, the coupling, the sail configurations and the coupled verification
+  transfer, the coupling, several sails, the sail configurations, the coupled
+  verification and the J/80 application
 - [docs/FLUID.md](docs/FLUID.md): provenance of the vendored fluid solver
 
 ## Tests and verification
 
 ```bash
 python3 test_membrane.py && python3 test_sail.py && python3 test_vendored.py
-python3 verify_sail.py --quick      # S1-S5, F1, C2-C4
-python3 verify_sail.py              # all twelve cases
+python3 verify_sail.py --quick      # S1-S5, F1, C2-C4, C7
+python3 verify_sail.py              # all thirteen cases
 ```
 
 ## Scope

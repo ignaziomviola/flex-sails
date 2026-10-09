@@ -97,7 +97,7 @@ def mirror_in_deck(points):
 # ------------------------------------------------------------------ solve
 
 def solve_fluid(points, onset, u_ref, rho=RHO_AIR, wake="frozen",
-                deck=False):
+                deck=False, extra=None):
     """Steady free- or frozen-wake solution on the sail mesh `points`.
 
     points  (nchord+1, nspan+1, 3) sail surface, luff at i = 0, foot at j = 0
@@ -105,6 +105,15 @@ def solve_fluid(points, onset, u_ref, rho=RHO_AIR, wake="frozen",
             wake along the onset streamlines; "free" relaxes it with the
             vendored solver, at one to two orders of magnitude more cost
     deck    mirror the sail in the deck plane y = 0
+    extra   optional velocity field of other lifting surfaces, a callable
+            extra(points, use) such as `induced_field` of another sail, with
+            use "matrix" at the collocation points and "loads" at the bound
+            vortices. It enters the boundary condition and the loads but not
+            the wake, which stays on the streamlines of `onset`: the
+            frozen-wake statement of several surfaces solved together. It
+            reaches the boundary condition through the one onset call the
+            vendored `solve` makes on the collocation array itself,
+            recognised by identity.
 
     Returns a dict with the per-panel forces of the sail itself (not of its
     image), the vendored lattice and solution, and the coefficients.
@@ -115,17 +124,24 @@ def solve_fluid(points, onset, u_ref, rho=RHO_AIR, wake="frozen",
     full = mirror_in_deck(points) if deck else points
     lat = pw.build_lattice(full)
 
+    colloc = lat["colloc"]
+
+    def flow(p):
+        v = onset(p)
+        return v + extra(p, "matrix") if extra is not None and p is colloc \
+            else v
+
     saved = pw.MAX_ITER
     try:
         if wake == "frozen":
             pw.MAX_ITER = 0
         with contextlib.redirect_stdout(io.StringIO()):
-            gamma, filaments, cl_v, cdi_v, _, s_ref_v = pw.solve(lat, onset,
+            gamma, filaments, cl_v, cdi_v, _, s_ref_v = pw.solve(lat, flow,
                                                                  u_ref)
     finally:
         pw.MAX_ITER = saved
 
-    force = panel_forces(gamma, lat, filaments, onset, rho)
+    force = panel_forces(gamma, lat, filaments, onset, rho, extra)
     full_span = lat["nspan"]
     j0 = full_span - nspan if deck else 0
     sel = (np.arange(nchord)[:, None] * full_span
@@ -138,17 +154,20 @@ def solve_fluid(points, onset, u_ref, rho=RHO_AIR, wake="frozen",
         "gamma_sail": gamma[sel],
         "cl_vendored": cl_v, "cdi_vendored": cdi_v, "s_ref_vendored": s_ref_v,
         "u_ref": u_ref, "rho": rho, "deck": deck, "wake": wake,
+        "onset": onset,
     }
     out.update(coefficients(out, points))
     return out
 
 
-def panel_forces(gamma, lat, filaments, onset, rho=RHO_AIR):
+def panel_forces(gamma, lat, filaments, onset, rho=RHO_AIR, extra=None):
     """Per-panel vector Kutta-Joukowski force, (n, 3), as the vendored totals.
 
     The same bound-segment midpoints, the same total velocity and the same
     regularised kernel as `panel_wing.compute_loads`, so that the sum over
     panels divided by q S is the vendored (CL, CDi) for rho = pw.RHO.
+    With `extra` the velocity of other surfaces is added at the bound
+    vortices, and the vendored totals no longer include it.
     """
     nspan = lat["nspan"]
     span_extent = np.ptp(lat["points"][..., 1])
@@ -158,7 +177,49 @@ def panel_forces(gamma, lat, filaments, onset, rho=RHO_AIR):
     p1, p2, strengths, cores = pw.all_segments(gamma, lat, filaments, onset,
                                                rc_wake)
     v = onset(mid) + pw.induced_velocity(mid, p1, p2, strengths, cores)
+    if extra is not None:
+        v = v + extra(mid, "loads")
     return rho * gamma[:, None] * np.cross(v, dl)
+
+
+def wake_segments(sol, use="loads"):
+    """Every vortex segment of a solved sail, its image and its wake.
+
+    Returns (p1, p2, strength, core). The cores are those the vendored code
+    uses for the same purpose: use = "matrix" gives the influence-matrix core
+    CORE_WING on every segment, wake included (panel_wing.assemble_matrix);
+    use = "loads" gives CORE_WING on the lattice and the wake core on the
+    wake (panel_wing.compute_loads).
+    """
+    lat = sol["lat"]
+    rc_wake = (pw.RC_WAKE_FRACTION * np.ptp(lat["points"][..., 1])
+               / lat["nspan"])
+    p1, p2, strength, core = pw.all_segments(sol["gamma"], lat,
+                                             sol["filaments"], sol["onset"],
+                                             rc_wake)
+    if use == "matrix":
+        core = np.full_like(core, pw.CORE_WING)
+    elif use != "loads":
+        raise ValueError(f"unknown use '{use}'; use 'matrix' or 'loads'")
+    return p1, p2, strength, core
+
+
+def induced_field(sol):
+    """The velocity a solved sail induces elsewhere, as an `extra` field.
+
+    Called as field(points, use), with use = "matrix" for a boundary
+    condition and "loads" for a load evaluation, so that another surface
+    sees this one exactly as the vendored code lets a surface see itself.
+    Iterating two sails to a fixed point is then the joint frozen-wake
+    solution of both (sail_plan.solve_sail_plan).
+    """
+    segs = {use: wake_segments(sol, use) for use in ("matrix", "loads")}
+
+    def field(points, use):
+        p1, p2, strength, core = segs[use]
+        return pw.induced_velocity(np.atleast_2d(points), p1, p2, strength,
+                                   core)
+    return field
 
 
 def coefficients(sol, points):

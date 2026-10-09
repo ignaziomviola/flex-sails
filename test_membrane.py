@@ -45,6 +45,21 @@ class TestKinematics(unittest.TestCase):
                                    f0.reshape(-1, 3, 3) @ Q.T,
                                    atol=1e-12 * np.abs(f0).max())
 
+    def test_cauchy_tension_of_a_rotated_stretch(self):
+        X = vs.flat_grid(3, 3)
+        m = sm.build_model(X, sm.grid_triangles(3, 3), 1000.0, 0.3)
+        Q = vs.rotation([1.0, 2.0, 0.5], 1.0)
+        values, d, _ = sm.membrane_tension(
+            m, (X * np.array([1.02, 1.01, 1.0])) @ Q.T)
+        Eb = 1000.0 / 0.91
+        e1, e2 = 0.5 * (1.02 ** 2 - 1), 0.5 * (1.01 ** 2 - 1)
+        np.testing.assert_allclose(
+            values, [[Eb * (e1 + 0.3 * e2) * 1.02 / 1.01,
+                      Eb * (e2 + 0.3 * e1) * 1.01 / 1.02]] * len(values),
+            rtol=1e-12)
+        np.testing.assert_allclose(np.abs(d @ Q), [[1.0, 0.0, 0.0]] * len(d),
+                                   atol=1e-12)
+
     def test_stress_free_reference_has_no_internal_force(self):
         X = vs.flat_grid(3, 3)
         X[:, 2] = 0.2 * X[:, 0] * (1 - X[:, 0])

@@ -219,7 +219,7 @@ def static_aeroelastic(model, points0, onset, u_ref, rho=sf.RHO_AIR,
                        wake="frozen", deck=False, load="pressure",
                        tol=TOL_COUPLING, max_iter=MAX_COUPLING,
                        accel="iqn", omega=OMEGA_START, nsteps_first=1,
-                       u0=None):
+                       u0=None, extra=None):
     """Flying shape: the displacement at which the sail carries its own load.
 
     Returns a dict with the displacement u (nn, 3), the deformed mesh, the
@@ -235,7 +235,7 @@ def static_aeroelastic(model, points0, onset, u_ref, rho=sf.RHO_AIR,
     fluid = struct = last = None
     for k in range(max_iter):
         pts = points0 + u.reshape(shape)
-        fluid = sf.solve_fluid(pts, onset, u_ref, rho, wake, deck)
+        fluid = sf.solve_fluid(pts, onset, u_ref, rho, wake, deck, extra)
         f = sf.nodal_forces(fluid, load).reshape(nn, 3)
         first = k == 0 and u0 is None
         struct = sm.solve_static(model, f_ext=f, u0=u,

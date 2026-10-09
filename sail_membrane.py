@@ -589,6 +589,29 @@ def reactions(model, u, f_ext=None, pressure=0.0):
     return out.reshape(-1, 3)
 
 
+def membrane_tension(model, x):
+    """True (Cauchy) membrane tension of each triangle at positions x.
+
+    The tension per unit current width is N = F S F^T / J, J the area
+    ratio. Returns its principal values (ne, 2) [N/m], descending, the unit
+    direction of the larger in space (ne, 3), and the element state. With
+    the cloth thickness t, N / t is the stress.
+    """
+    F, E = membrane_kinematics(model, x)
+    S, _, state = membrane_stress(E, model["Et"], model["nu"],
+                                  model["wrinkling"])
+    C = np.einsum("ekI,ekJ->eIJ", F, F)
+    J = np.sqrt(np.linalg.det(C))
+    # the in-plane principal values are those of S C / J, which is similar
+    # to the symmetric C^1/2 S C^1/2 / J and so has real eigenvalues
+    M = np.einsum("eIK,eKJ->eIJ", S, C) / J[:, None, None]
+    half = 0.5 * (M[:, 0, 0] + M[:, 1, 1])
+    disc = np.sqrt(np.maximum(half ** 2 - np.linalg.det(M), 0.0))
+    values = np.stack([half + disc, half - disc], axis=1)
+    N = np.einsum("ekI,eIJ,elJ->ekl", F, S, F) / J[:, None, None]
+    return values, np.linalg.eigh(N)[1][:, :, 2], state
+
+
 def principal_stresses(S):
     """Principal second Piola-Kirchhoff stresses (ne, 2), descending."""
     return np.linalg.eigvalsh(S)[:, ::-1]

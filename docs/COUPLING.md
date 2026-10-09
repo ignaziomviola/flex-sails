@@ -98,6 +98,31 @@ the height. The luff, the boom and the headboard are pinned. The headboard is
 pinned because a free, unbattened head twists off by tens of degrees, and the
 static problem then has no well-defined answer.
 
+## Several sails
+
+The vendored lifting surface takes one structured surface, so each sail is
+meshed and solved on its own. Sails nonetheless see one another.
+`sail_fluid.induced_field` turns a solved sail into a velocity field, which
+`solve_fluid` and `static_aeroelastic` accept as `extra`. The field enters
+the boundary condition and the loads, and it leaves the frozen wake on the
+streamlines of the onset. `sail_plan.solve_sail_plan` solves every sail's
+flying shape in turn, with the latest fields of the others, until no CL
+changes by more than 1e-4. With frozen wakes this fixed point is the joint
+solution of all the lifting surfaces.
+
+Two details decide whether the fixed point is right:
+
+- **The other sail enters the boundary condition with the cores of the
+  vendored influence matrix, and the loads with those of its load
+  evaluation.** The vendored code uses a near-zero core on every segment of
+  the matrix, wake included, and the wake core only for loads. A first version
+  used the wake core in both. The halves of a split wing then each saw their
+  own tip vortices at full strength and the other half's softened, and the
+  split wing came out 2.7% low in lift, independently of the mesh.
+- **The other sail does not deflect the wake.** The field reaches the vendored
+  `solve` only through its one onset call on the collocation array, recognised
+  by identity.
+
 ## Verification
 
 ### F1, panel loads, transfer and the deck image
@@ -237,6 +262,120 @@ Battened mainsail on 8 × 12 panels, leech pre-strain 0.01, coupling residual
 
 The free wake raises CL by 4.8% and CD by 11%, and leaves the twist unchanged
 to 0.02 degrees. It costs 46 times more.
+
+### C7, two surfaces that see each other
+
+A rectangular wing of aspect ratio eight at 5 degrees is solved whole, and as
+two halves that see each other through `induced_field`:
+
+| mesh | CL whole | CL halves | CL error | CDi error | last sweep change |
+| --- | --- | --- | --- | --- | --- |
+| 4 × 12 | 0.418125 | 0.418125 | -9.2e-11 | +1.3e-10 | 3.9e-10 |
+| 4 × 24 | 0.409413 | 0.409413 | -3.4e-8 | +4.6e-8 | 6.0e-8 |
+| 8 × 24 | 0.409498 | 0.409497 | -3.3e-8 | +4.4e-8 | 5.8e-8 |
+
+The error equals the change over the last Gauss–Seidel sweep, so the two
+halves reproduce the whole wing to the iteration tolerance. The first five
+sweeps on 4 × 12 give CL = 0.372522, 0.413774, 0.417690, 0.418081 and
+0.418120.
+
+## Application: a J/80 sail plan upwind
+
+`python3 sail_plan.py` solves a 135% genoa and a mainsail on the rig of the
+J/80 one-design, together, upwind in a 10-knot breeze. It prints the summary
+below and writes Figures 1 to 3 to `docs/figures/`. Each run takes ca. 100 s.
+
+### Data
+
+| quantity | value | source |
+| --- | --- | --- |
+| I, J, P, E | 31.5, 9.5, 30.0, 12.5 ft (9.60, 2.90, 9.14, 3.81 m) | J/80 class measurements (Wikipedia, KeelIndex) |
+| cloth | woven polyester, E = 873 MPa, t = 0.25 mm, nu = 0.4, so E t = 218 kN m^-1 | Blicblau et al. (2008), finite element analysis of a woven polyester sail |
+| wind gradient | power law, exponent 0.11, true wind 10 kn at 10 m above the sea | exponent recommended over the sea by Hsu et al. (1994) |
+| true wind angle, boat speed | 42 degrees, 5.5 kn | assumed upwind operating point |
+| genoa | LP 135% of J, luff on the forestay from 0.15 m to 0.3 m below the hounds, head 0.15 m; moulded depth 13% at 40% of the chord; sheeted at 10 degrees at the foot and 18 degrees at the head | assumed design and trim |
+| mainsail | luff on the mast from a boom 0.9 m above the sheer, head 0.15 m; moulded depth 11% at 45%; sheeted at 2 and 10 degrees; three full battens of EI = 50 N m^2 | assumed design and trim |
+| supports | genoa: luff, tack, clew and head pinned, foot and leech free with tapes of EA = 1e5 N at 1% pre-strain; mainsail: luff, boom and headboard pinned, leech free with the same tape | assumed |
+| cloth pre-strain | 0.001 | assumed |
+| mesh | 10 chordwise × 16 spanwise panels per sail, frozen wakes | |
+
+The apparent wind is the true wind minus the boat velocity. At 5 m above the
+sheer it is 7.18 m s^-1 at 26.7 degrees, at the boom 6.56 m s^-1 at
+25.2 degrees, and at the masthead 7.52 m s^-1 at 27.4 degrees.
+
+### Results
+
+| | genoa | mainsail | plan |
+| --- | --- | --- | --- |
+| area [m^2] | 20.18 | 18.61 | 38.79 |
+| CL | 2.139 | 0.704 | 1.450 |
+| CD (inviscid) | 0.270 | 0.369 | 0.317 |
+| aerodynamic force [N] | 1388 | 468 | 1833 |
+| centre of effort above the sheer [m] | 4.41 | 5.03 | 4.56 |
+| largest displacement from the moulded shape [mm] | 166 | 93 | |
+| median sigma_1 [MPa] | 2.05 | 1.62 | |
+| 95th percentile of sigma_1 [MPa] | 4.85 | 2.93 | |
+| largest sigma_1 [MPa] | 15.1 (clew) | 10.3 | |
+| cloth taut / wrinkled / slack | 47 / 52 / 1% | 42 / 58 / 0% | |
+| leech tape tension [N] | 837 to 1649 | 938 to 1285 | |
+
+The coefficients use each sail's own area and the apparent wind at 5 m. The
+plan iteration converges in nine sweeps. Alone, the genoa has CL = 1.760 and
+the mainsail CL = 1.956. Together, the mainsail's upwash raises the genoa to
+2.139, and the genoa's downwash lowers the mainsail to 0.704. This is the
+classical interaction of the two sails, which modelling them one at a time
+would miss. Under load, the genoa
+deepens from 13% to 16% at mid-height and 19% at three quarters, with the draft
+moving aft from 40% to 62% and 66%. The mainsail deepens from 11% to 12%.
+
+Figure 1 (`j80_displacement.png`): displacement magnitude from the moulded
+shape (grey wireframe) on the flying shape, for (a) the genoa and (b) the
+mainsail. Figure 2 (`j80_stress.png`): the larger principal stress sigma_1 on
+the flying shape, with black strokes along its direction, for (a) the genoa
+and (b) the mainsail. The colour saturates at the 99th percentile, 9.0 MPa.
+Figure 3 (`j80_sections.png`): moulded (grey) and flying (black) sections at
+the foot and at a quarter, half and three quarters of the height, in boat
+axes, for (a) the genoa and (b) the mainsail.
+
+The stress paths in Figure 2 run from the clew up the leech of both sails and
+fan out from the genoa clew. Between the battens of the mainsail they run
+chordwise from the mast to the leech.
+
+### Mesh dependence
+
+| mesh per sail | plan CL | genoa CL | genoa max \|u\| [mm] | genoa median / 95th sigma_1 [MPa] | main CL | main max \|u\| [mm] | main median / 95th sigma_1 [MPa] |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 8 × 16 | 1.431 | 2.104 | 153 | 1.98 / 4.75 | 0.702 | 86 | 1.58 / 2.80 |
+| 10 × 16 | 1.450 | 2.139 | 166 | 2.05 / 4.85 | 0.704 | 93 | 1.62 / 2.93 |
+| 16 × 16 | 1.481 | 2.195 | 180 | 2.07 / 5.06 | 0.706 | 98 | 1.66 / 2.88 |
+| 10 × 24 | 1.487 | 2.184 | 168 | 2.12 / 4.63 | 0.732 | 90 | 1.64 / 2.87 |
+
+From 8 to 16 chordwise panels, the median and the 95th percentile of the
+stress change by up to 6%, and the mainsail's lift by 0.6%. The genoa's lift
+grows by 4.3%, about half of which is the chordwise discretisation of the
+lifting surface (C5). The largest displacement grows by 8 to 10% per
+refinement. From 16 to 24 spanwise panels, the lift changes by 2.1% on the
+genoa and 4.0% on the mainsail, the largest displacement by 1 to 3%, and the
+stress percentiles by up to 5%. The lift of the plan is therefore known to
+ca. 4%, its stresses to ca. 6%, and its largest displacements to ca. 10%. The
+genoa has no battens, so its free leech hooks within one panel (C5 and
+docs/MEMBRANE.md). The largest stresses sit at the pinned corners and grow
+with refinement, as at any re-entrant corner of a membrane. They are reported
+but are not converged numbers.
+
+### What this case is not
+
+- **The flow is inviscid and attached.** Over its lower half, the genoa's
+  chord is at 14 to 17 degrees to the apparent wind, where a real genoa's leech flow
+  separates. Its CL of 2.14 and the plan's CD of 0.32 are inviscid values, not
+  predictions of measured coefficients.
+- **There is no hull, deck or sea surface.** The feet see free air, which
+  raises the induced drag.
+- **The heel, the mast and its bend, the forestay sag and the cloth's
+  orthotropy are absent.**
+- **Nothing here is validated against a measured sail plan.** The input data
+  are from the literature. The trim, the moulded shapes and the tape tensions
+  are stated assumptions.
 
 ## Open items
 

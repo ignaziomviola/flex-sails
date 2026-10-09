@@ -78,6 +78,79 @@ class TestFluid(unittest.TestCase):
         self.assertAlmostEqual(s2["CL"], self.sol["CL"], places=13)
 
 
+class TestInteraction(unittest.TestCase):
+
+    def test_split_wing_is_the_whole_wing(self):
+        import verify_sail as vs
+        full, hist = vs.split_wing(4, 8, sweeps=8)
+        self.assertAlmostEqual(hist[-1][0], full["CL"], places=8)
+        self.assertAlmostEqual(hist[-1][1], full["CD"], places=8)
+
+    def test_extra_field_leaves_the_wake_alone(self):
+        pts = pw.pitch_mesh(msi.rectangular_mesh(), np.radians(5.0))
+        a = sf.solve_fluid(pts, UNIFORM, 1.0, rho=pw.RHO)
+
+        def side_wind(p, use):
+            v = np.zeros((len(np.atleast_2d(p)), 3))
+            v[:, 2] = 0.05
+            return v
+        b = sf.solve_fluid(pts, UNIFORM, 1.0, rho=pw.RHO, extra=side_wind)
+        for fa, fb in zip(a["filaments"], b["filaments"]):
+            np.testing.assert_array_equal(fa["nodes"], fb["nodes"])
+        self.assertGreater(b["CL"], a["CL"])
+
+    def test_extra_equal_to_the_onset_change(self):
+        """A uniform extra upwash is a change of incidence for the boundary
+        condition: same circulation as rotating the onset, wake aside."""
+        pts = pw.pitch_mesh(msi.rectangular_mesh(), np.radians(5.0))
+
+        def up(p, use):
+            v = np.zeros((len(np.atleast_2d(p)), 3))
+            v[:, 2] = 0.01
+            return v
+
+        def tilted(p):
+            v = UNIFORM(p)
+            v[:, 2] = 0.01
+            return v
+        b = sf.solve_fluid(pts, UNIFORM, 1.0, rho=pw.RHO, extra=up)
+        c = sf.solve_fluid(pts, tilted, 1.0, rho=pw.RHO)
+        np.testing.assert_allclose(b["gamma"], c["gamma"], rtol=2e-3)
+
+
+class TestSailPlan(unittest.TestCase):
+
+    def test_apparent_wind_triangle(self):
+        import sail_plan as sp
+        still = sp.apparent_wind(5.0, 40.0, 0.0)
+        aws, awa = still(10.0)
+        self.assertAlmostEqual(aws, 5.0)
+        self.assertAlmostEqual(np.degrees(awa), 40.0)
+        wind = sp.apparent_wind(5.0, 40.0, 2.5)
+        low, high = wind(1.0), wind(10.0)
+        self.assertLess(low[1], high[1])          # it veers aft aloft
+        self.assertLess(high[1], np.radians(40.0))
+        self.assertAlmostEqual(high[0] ** 2, 5.0 ** 2 + 2.5 ** 2
+                               + 2 * 5.0 * 2.5 * np.cos(np.radians(40.0)))
+
+    def test_j80_geometry(self):
+        import sail_plan as sp
+        case = dict(sp.J80_UPWIND)
+        _, _, awa, _ = sp.apparent_onset(case)
+        sails = sp.j80_sails(case, nchord=4, nspan=4)
+        genoa = sp.to_boat(sails["genoa"][0], awa)
+        main = sp.to_boat(sails["main"][0], awa)
+        I, J, E = sp.J80["I"], sp.J80["J"], sp.J80["E"]
+        np.testing.assert_allclose(genoa[0, :, 0] / genoa[0, :, 2], J / I)
+        np.testing.assert_allclose(genoa[0, :, 1], 0.0, atol=1e-12)
+        np.testing.assert_allclose(main[0, :, 0], J)
+        foot = np.linalg.norm(main[-1, 0] - main[0, 0])
+        self.assertAlmostEqual(foot, E, places=10)
+        lp = np.linalg.norm(np.cross(genoa[-1, 0] - genoa[0, 0],
+                                     [J, 0.0, I]) / np.hypot(J, I))
+        self.assertAlmostEqual(lp, case["lp"] * J, delta=0.02 * J)
+
+
 class TestTheory2D(unittest.TestCase):
 
     def test_rigid_limit_is_two_pi_alpha(self):
