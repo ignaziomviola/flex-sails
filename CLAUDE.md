@@ -36,7 +36,7 @@ configurations, the F and C cases and the J/80 application.
 
 ```bash
 python3 test_membrane.py          # 21 tests, ca. 2 s
-python3 test_sail.py              # 22 tests, ca. 4 s
+python3 test_sail.py              # 24 tests, ca. 4 s
 python3 test_vendored.py          # 4 tests: the fluid copies are unmodified
 python3 -m unittest test_sail.TestCoupling -v
 

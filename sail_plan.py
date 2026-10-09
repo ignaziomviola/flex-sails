@@ -228,6 +228,155 @@ def cloth_stress(model, points, t):
     return {"N": N, "sigma": N / t / 1e6, "direction": d, "state": state}
 
 
+# ------------------------------------------------------ stress trajectories
+
+def nodal_tension(model, points):
+    """Cauchy tension tensor averaged to the nodes, (nchord+1, nspan+1, 3, 3).
+
+    The Cartesian components are averaged with the triangle areas as
+    weights, which does not depend on any surface basis; each query point
+    then projects the interpolated tensor on its own tangent plane.
+    """
+    nc, ns = points.shape[0] - 1, points.shape[1] - 1
+    x = points.reshape(-1, 3)
+    tris = model["tris"]
+    N = sm.tension_tensor(model, x)
+    xe = x[tris]
+    area = 0.5 * np.linalg.norm(np.cross(xe[:, 1] - xe[:, 0],
+                                         xe[:, 2] - xe[:, 0]), axis=1)
+    acc = np.zeros((len(x), 3, 3))
+    wsum = np.zeros(len(x))
+    for k in range(3):
+        np.add.at(acc, tris[:, k], area[:, None, None] * N)
+        np.add.at(wsum, tris[:, k], area)
+    return (acc / wsum[:, None, None]).reshape(nc + 1, ns + 1, 3, 3)
+
+
+def _cell(points, u):
+    """Bilinear position, tangent basis (3, 2) and cell weights at u."""
+    nc, ns = points.shape[0] - 1, points.shape[1] - 1
+    i = min(int(np.floor(u[0])), nc - 1)
+    j = min(int(np.floor(u[1])), ns - 1)
+    s, t = u[0] - i, u[1] - j
+    p00, p10 = points[i, j], points[i + 1, j]
+    p01, p11 = points[i, j + 1], points[i + 1, j + 1]
+    x = ((1 - s) * (1 - t) * p00 + s * (1 - t) * p10 + (1 - s) * t * p01
+         + s * t * p11)
+    a1 = (1 - t) * (p10 - p00) + t * (p11 - p01)
+    a2 = (1 - s) * (p01 - p00) + s * (p11 - p10)
+    w = (i, j, s, t)
+    return x, np.stack([a1, a2], axis=1), w
+
+
+def principal_direction(points, tensor, u, prev=None):
+    """Unit tangent of the larger principal tension at grid point u.
+
+    The grid indices (i, j) are the surface coordinates and the bilinear
+    surface through the nodes has the tangent basis a = dx/du (3, 2). With
+    the bilinearly interpolated nodal tension N, the principal directions
+    solve a^T N a p = lambda a^T a p. Returns the step direction in grid
+    coordinates scaled to unit length in space, with the sign that continues
+    `prev`. Returns None where the two principal tensions coincide.
+    """
+    _, a, (i, j, s, t) = _cell(points, u)
+    N = ((1 - s) * (1 - t) * tensor[i, j] + s * (1 - t) * tensor[i + 1, j]
+         + (1 - s) * t * tensor[i, j + 1] + s * t * tensor[i + 1, j + 1])
+    T = a.T @ N @ a
+    g = a.T @ a
+    L = np.linalg.cholesky(g)
+    Li = np.linalg.inv(L)
+    w, v = np.linalg.eigh(Li @ T @ Li.T)
+    if w[1] - w[0] <= 1e-9 * max(abs(w[1]), 1e-300):
+        return None
+    p = Li.T @ v[:, 1]
+    p = p / np.linalg.norm(a @ p)
+    if prev is not None and p @ g @ prev < 0.0:
+        p = -p
+    return p
+
+
+def stress_trajectories(model, points, spacing, step=None, max_steps=2000):
+    """Curves on the sail tangent everywhere to the larger principal tension.
+
+    Evenly spaced tensor lines in the manner of Jobard and Lefer (1997):
+    seeds are tried at every cell centre in order of decreasing tension, and
+    a seed farther than `spacing` [m] from every line drawn so far starts a
+    line, integrated both ways by the midpoint rule with steps of `step` [m]
+    in space, cut short at every cell edge so that no step straddles the
+    kink of the bilinear surface there, and stopped at the edge of the sail, at a degenerate point, or
+    within spacing / 2 of another line. Returns a list of (n, 3) polylines
+    on the surface, in the frame of `points`.
+    """
+    nc, ns = points.shape[0] - 1, points.shape[1] - 1
+    step = step or 0.25 * spacing
+    tensor = nodal_tension(model, points)
+    centres = [(i + 0.5, j + 0.5) for i in range(nc) for j in range(ns)]
+    # seeds in order of decreasing mean tension, the trace of N
+    mag = [np.trace(tensor[int(c[0]), int(c[1])]) for c in centres]
+    order = np.argsort(mag)[::-1]
+    lines, cloud = [], np.zeros((0, 3))
+
+    def near(x, dist):
+        return len(cloud) and np.min(np.sum((cloud - x) ** 2, axis=1)) \
+            < dist * dist
+
+    def inside(u):
+        return 0.0 <= u[0] <= nc and 0.0 <= u[1] <= ns
+
+    def to_edge(u, p):
+        """Distance in space along p to the edge of the cell u is in."""
+        d = np.inf
+        for k in (0, 1):
+            if p[k] > 0.0:
+                d = min(d, (np.floor(u[k]) + 1.0 - u[k]) / p[k])
+            elif p[k] < 0.0:
+                d = min(d, (u[k] - np.floor(u[k])) / -p[k])
+        return d
+
+    def march(u0, p0):
+        u, prev, out = np.array(u0, float), p0, []
+        for _ in range(max_steps):
+            k1 = principal_direction(points, tensor, u, prev)
+            if k1 is None:
+                break
+            # stop at the cell edge, where the bilinear surface has a kink,
+            # and step just across it, so that every step lies in one cell
+            h = min(step, to_edge(u, k1))
+            cross = h < step
+            um = u + 0.5 * h * k1
+            k2 = principal_direction(points, tensor, um, k1)
+            if k2 is None:
+                break
+            un = u + h * k2
+            if cross:
+                un = un + 1e-9 * k2
+            if not inside(un):
+                break
+            xn = _cell(points, un)[0]
+            if near(xn, 0.5 * spacing):
+                break
+            out.append(xn)
+            u, prev = un, k2
+        return out
+
+    for k in order:
+        u0 = np.array(centres[k])
+        x0 = _cell(points, u0)[0]
+        if near(x0, spacing):
+            continue
+        p0 = principal_direction(points, tensor, u0)
+        if p0 is None:
+            continue
+        fwd = march(u0, p0)
+        bwd = march(u0, -p0)
+        line = np.array(bwd[::-1] + [x0] + fwd)
+        if len(line) < 3:
+            continue
+        lines.append(line)
+        cloud = np.vstack([cloud, line])
+    return lines
+
+
 # ------------------------------------------------------------------ output
 
 def to_boat(p, awa):
@@ -248,8 +397,8 @@ def element_values(field, model, pts0, pts, t):
 
 def plot_plan(sails, res, case, field, awa, save=None):
     """One 3D panel per sail, coloured by `field` on the flying shape, with
-    the moulded shape as a grey wireframe; for the stress, short black
-    strokes along the larger principal direction. One colour scale for both
+    the moulded shape as a grey wireframe; for the stress, the stress
+    trajectories: black curves tangent everywhere to sigma_1. One colour scale for both
     sails; the stress scale saturates at the 99th percentile, because the
     pinned corners carry stresses that grow with mesh refinement."""
     import matplotlib.pyplot as plt
@@ -280,15 +429,11 @@ def plot_plan(sails, res, case, field, awa, save=None):
         for i in (0, -1):
             ax.plot(*P0[i, :].T, color="0.6", lw=0.5)
         if direction is not None:
-            aft, lee = boat_axes(awa)
-            d = np.stack([direction @ aft, direction @ lee,
-                          direction[:, 1]], axis=1)
-            c = tri.mean(axis=1)
-            half = 0.3 * np.ptp(P[..., 2]) / P.shape[1]
-            seg = np.stack([c - half * d, c + half * d], axis=1)[::2]
-            # lifted a little to leeward so that they sit on the surface
-            seg[..., 1] += 0.02
-            ax.add_collection3d(Line3DCollection(seg, colors="k",
+            spacing = 0.04 * np.ptp(P[..., 2])
+            lines = [to_boat(c, awa)
+                     for c in stress_trajectories(model, res[n]["points"],
+                                                  spacing)]
+            ax.add_collection3d(Line3DCollection(lines, colors="k",
                                                  linewidths=0.6))
         # each panel on its own sail, at equal scale in all three axes
         plo, phi = P.reshape(-1, 3).min(axis=0), P.reshape(-1, 3).max(axis=0)

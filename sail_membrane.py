@@ -589,6 +589,18 @@ def reactions(model, u, f_ext=None, pressure=0.0):
     return out.reshape(-1, 3)
 
 
+def tension_tensor(model, x):
+    """Cauchy membrane tension tensor of each triangle, (ne, 3, 3) [N/m].
+
+    N = F S F^T / J, J the area ratio: a tensor in space that lies in the
+    plane of the deformed triangle.
+    """
+    F, E = membrane_kinematics(model, x)
+    S, _, _ = membrane_stress(E, model["Et"], model["nu"], model["wrinkling"])
+    J = np.sqrt(np.linalg.det(np.einsum("ekI,ekJ->eIJ", F, F)))
+    return np.einsum("ekI,eIJ,elJ->ekl", F, S, F) / J[:, None, None]
+
+
 def membrane_tension(model, x):
     """True (Cauchy) membrane tension of each triangle at positions x.
 

@@ -151,6 +151,48 @@ class TestSailPlan(unittest.TestCase):
         self.assertAlmostEqual(lp, case["lp"] * J, delta=0.02 * J)
 
 
+class TestStressTrajectories(unittest.TestCase):
+
+    def test_uniform_stretch_on_a_distorted_grid_gives_straight_lines(self):
+        import sail_membrane as sm
+        import sail_plan as sp
+        import verify_sail as vs
+        nc, ns = 10, 8
+        X = vs.flat_grid(nc, ns, 2.0, 1.6, jitter=0.25)
+        m = sm.build_model(X, sm.grid_triangles(nc, ns), 1000.0, 0.3)
+        th = np.radians(30.0)
+        R = np.array([[np.cos(th), -np.sin(th), 0.0],
+                      [np.sin(th), np.cos(th), 0.0], [0.0, 0.0, 1.0]])
+        D = R @ np.diag([1.03, 1.005, 1.0]) @ R.T
+        lines = sp.stress_trajectories(m, (X @ D.T).reshape(nc + 1, ns + 1,
+                                                            3), 0.15)
+        self.assertGreaterEqual(len(lines), 8)
+        normal = np.array([-np.sin(th), np.cos(th), 0.0])
+        drift = max(np.ptp(L @ normal) for L in lines)
+        self.assertLess(drift, 3e-3)                # 1.9 mm over 2.4 m
+
+    def test_inflated_strip_lines_follow_the_arc(self):
+        import sail_membrane as sm
+        import sail_plan as sp
+        import verify_sail as vs
+        nc, ns = 16, 4
+        X = vs.flat_grid(nc, ns, 1.0, 0.4)
+        fixed = np.zeros_like(X, dtype=bool)
+        fixed[:, 1] = True
+        for j in range(ns + 1):
+            fixed[sm.node_id(0, j, ns)] = fixed[sm.node_id(nc, j, ns)] = True
+        m = sm.build_model(X, sm.grid_triangles(nc, ns), 1000.0, 0.3, 0.01,
+                           fixed=fixed)
+        u = sm.solve_static(m, pressure=50.0)["u"]
+        lines = sp.stress_trajectories(m, (X + u).reshape(nc + 1, ns + 1, 3),
+                                       0.08)
+        self.assertEqual(len(lines), 4)
+        for L in lines:
+            self.assertLess(np.ptp(L[:, 1]), 1e-3)
+            self.assertGreater(np.ptp(L[:, 0]), 0.95)
+            self.assertGreater(L[:, 2].max(), 0.1)
+
+
 class TestTheory2D(unittest.TestCase):
 
     def test_rigid_limit_is_two_pi_alpha(self):

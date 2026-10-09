@@ -331,15 +331,34 @@ moving aft from 40% to 62% and 66%. The mainsail deepens from 11% to 12%.
 Figure 1 (`j80_displacement.png`): displacement magnitude from the moulded
 shape (grey wireframe) on the flying shape, for (a) the genoa and (b) the
 mainsail. Figure 2 (`j80_stress.png`): the larger principal stress sigma_1 on
-the flying shape, with black strokes along its direction, for (a) the genoa
-and (b) the mainsail. The colour saturates at the 99th percentile, 9.0 MPa.
+the flying shape, with its stress trajectories, the black curves tangent
+everywhere to sigma_1, for (a) the genoa and (b) the mainsail. The colour
+saturates at the 99th percentile, 9.0 MPa.
 Figure 3 (`j80_sections.png`): moulded (grey) and flying (black) sections at
 the foot and at a quarter, half and three quarters of the height, in boat
 axes, for (a) the genoa and (b) the mainsail.
 
-The stress paths in Figure 2 run from the clew up the leech of both sails and
-fan out from the genoa clew. Between the battens of the mainsail they run
-chordwise from the mast to the leech.
+In Figure 2 the trajectories fan out from the genoa clew and run up its
+leech, and they cross the mainsail diagonally from the clew to the luff.
+
+The trajectories (`sail_plan.stress_trajectories`) are integrated on the
+sail's own grid coordinates. The Cauchy tension tensor is averaged to the
+nodes in Cartesian components, which depend on no surface basis. At each
+point it is interpolated bilinearly and projected on the tangent plane of the
+bilinear surface through the nodes, where the principal direction solves
+a^T N a p = lambda a^T a p. Working with the tensor rather than with
+direction vectors removes the sign ambiguity of a principal direction. The
+lines are integrated by the midpoint rule, each step cut at the cell edge
+where the bilinear surface has a kink, and spaced evenly after Jobard and
+Lefer (1997), with seeds taken in order of decreasing tension. Two tests
+check them:
+- a uniform stretch at 30 degrees on a grid with nodes displaced by up to
+  25% of the spacing gives straight lines at 30 degrees, drifting sideways
+  by 1.9 mm over 2.4 m. The drift falls from 5.0 to 1.9 to 0.31 mm as the
+  step goes from 75 to 38 to 15 mm, i.e. at second order. Without the cut
+  at cell edges it was 27 mm and fell at first order;
+- on the inflated strip of S4, the lines follow the arc to its full sag of
+  0.117 m and stay within 0.1 mm of constant span.
 
 ### Mesh dependence
 
