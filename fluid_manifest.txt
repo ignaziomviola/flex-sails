@@ -1,0 +1,8 @@
+# SHA-256 of the files vendored verbatim from
+# https://github.com/ignaziomviola/free-wake-lifting-surface
+# commit 07fc7003dc98dbc4142546b52cbcced24a55c84e
+# Regenerate with: python3 test_vendored.py --write
+13a1f1b5abad098ffdc61c9f761bc9c20a1e356eaf3148e2eec0b305ffd4e185  panel_wing.py
+a66dcb53843d5ba5c251c7ddd2e978e2ab10ee51333d0aab3a9cd09d91107125  make_sample_inputs.py
+303da93f6ad85902b47c2ea405bb82d6f9572e7fbfbf203359687aa821d55c20  docs/fluid/README.md
+761b67dfd6e13b0ad6cdc81254c814bebac25f1e29faf8fd870cae2ef911f9c3  docs/fluid/HANDOVER.md
